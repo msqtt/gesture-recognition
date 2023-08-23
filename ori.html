@@ -1,0 +1,193 @@
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Interpreting Hand Gestures and Sign Language in the Webcam with AI using TensorFlow.js</title>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-data@2.0.0/dist/tf-data.min.js"></script>
+        <style>
+            img, video {
+                object-fit: cover;
+            }
+        </style>
+    </head>
+    <p>这是一个手势识别的演示(运行需要打开网页的摄像头权限，在开始之前请仔细阅读并遵循以下步骤执行,具体可以跟着教学视频进行）：</p>
+    <p> 该演示使用一种名为神经网络的计算模型进行手势识别。</p>
+    <p> 神经网络遵循 数据集采集&rarr;模型训练&rarr;推理预测
+        的流程来实现任务，用通俗来讲就是，通过采集数据并训练来让网络<strong>学会</strong>这个手势，并用这个<strong>学会</strong>手势后的模型，来识别出来该手势。</p>
+    <p> 在实现上，你首先需要进行数据集采集：</p>
+    <ol>
+        <li> 打开摄像头，做出你想要训练的手势，并单击类别按钮以捕获你手部的手势图片（可以尝试每个类别5-6张图片），即可将图片输入我们后台之后，需要进行模型训练： </li>
+        <li> 你捕捉好图片后，单击<code>train</code>按钮，将捕获的图片传入我们的后台，我们会提取你的数据进行训练，神经网络可以被训练以检测不同的类别的手势，如：无手势，拳头✊，布🖐，剪刀✌️。训练结束后即可进行预测。
+        </li>
+        <li> 最后，即可进行手势识别。</li>
+    </ol>
+
+    <p> 训练中提高识别准确率的小tips：</p>
+    <blockquote>
+        <li>我们可以通过拍摄更多照片并再次单击“train”按钮来改进模型</li>
+        <li>训练更少的手势种类，来提高模型的识别率。例如，只告诉网络三种手势，降低网络将手势混淆的情况</li>
+    </blockquote>
+    <body>
+        <video autoplay playsinline muted id="webcam" width="224" height="224"></video>
+        <div id="buttons">
+            <button onclick="captureSample(0)">None</button>
+            <button onclick="captureSample(1)">✊ (Rock)</button>
+            <button onclick="captureSample(2)">🖐 (Paper)</button>
+            <button onclick="captureSample(3)">✌️ (Scissors)</button>
+            <button onclick="trainModel()">Train</button>
+        </div>
+        <h1 id="status">Loading...</h1>
+        <script>
+        let trainingData = [];
+
+        const labels = [
+            "None",
+            "✊ (Rock)",
+            "🖐 (Paper)",
+            "✌️ (Scissors)",
+        ];
+
+        function setText( text ) {
+            document.getElementById( "status" ).innerText = text;
+        }
+
+        async function predictImage() {
+            if( !hasTrained ) { return; } // Skip prediction until trained
+            const img = await getWebcamImage();
+            let result = tf.tidy( () => {
+                const input = img.reshape( [ 1, 224, 224, 3 ] );
+                return model.predict( input );
+            });
+            img.dispose();
+            let prediction = await result.data();
+            result.dispose();
+            // Get the index of the highest value in the prediction
+            let id = prediction.indexOf( Math.max( ...prediction ) );
+            setText( labels[ id ] );
+        }
+
+        function createTransferModel( model ) {
+            // Create the truncated base model (remove the "top" layers, classification + bottleneck layers)
+            const bottleneck = model.getLayer( "dropout" ); // This is the final layer before the conv_pred pre-trained classification layer
+            const baseModel = tf.model({
+                inputs: model.inputs,
+                outputs: bottleneck.output
+            });
+            // Freeze the convolutional base
+            for( const layer of baseModel.layers ) {
+                layer.trainable = false;
+            }
+            // Add a classification head
+            const newHead = tf.sequential();
+            newHead.add( tf.layers.flatten( {
+                inputShape: baseModel.outputs[ 0 ].shape.slice( 1 )
+            } ) );
+            newHead.add( tf.layers.dense( { units: 100, activation: 'relu' } ) );
+            newHead.add( tf.layers.dense( { units: 100, activation: 'relu' } ) );
+            newHead.add( tf.layers.dense( { units: 10, activation: 'relu' } ) );
+            newHead.add( tf.layers.dense( {
+                units: labels.length,
+                kernelInitializer: 'varianceScaling',
+                useBias: false,
+                activation: 'softmax'
+            } ) );
+            // Build the new model
+            const newOutput = newHead.apply( baseModel.outputs[ 0 ] );
+            const newModel = tf.model( { inputs: baseModel.inputs, outputs: newOutput } );
+            return newModel;
+        }
+
+        async function trainModel() {
+            hasTrained = false;
+            setText( "Training..." );
+
+            // Setup training data
+            const imageSamples = [];
+            const targetSamples = [];
+            trainingData.forEach( sample => {
+                imageSamples.push( sample.image );
+                let cat = [];
+                for( let c = 0; c < labels.length; c++ ) {
+                    cat.push( c === sample.category ? 1 : 0 );
+                }
+                targetSamples.push( tf.tensor1d( cat ) );
+            });
+            const xs = tf.stack( imageSamples );
+            const ys = tf.stack( targetSamples );
+
+            // Train the model on new image samples
+            model.compile( { loss: "meanSquaredError", optimizer: "adam", metrics: [ "acc" ] } );
+
+            await model.fit( xs, ys, {
+                epochs: 30,
+                shuffle: true,
+                callbacks: {
+                    onEpochEnd: ( epoch, logs ) => {
+                        console.log( "Epoch #", epoch, logs );
+                    }
+                }
+            });
+            hasTrained = true;
+        }
+
+        // Mobilenet v1 0.25 224x224 model
+        const mobilenet = "https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_0.25_224/model.json";
+
+        let model = null;
+        let hasTrained = false;
+
+        async function setupWebcam() {
+            return new Promise( ( resolve, reject ) => {
+                const webcamElement = document.getElementById( "webcam" );
+                const navigatorAny = navigator;
+                navigator.getUserMedia = navigator.getUserMedia ||
+                navigatorAny.webkitGetUserMedia || navigatorAny.mozGetUserMedia ||
+                navigatorAny.msGetUserMedia;
+                if( navigator.getUserMedia ) {
+                    navigator.getUserMedia( { video: true },
+                        stream => {
+                            webcamElement.srcObject = stream;
+                            webcamElement.addEventListener( "loadeddata", resolve, false );
+                        },
+                    error => reject());
+                }
+                else {
+                    reject();
+                }
+            });
+        }
+
+        async function resizeImage(imageTensor, targetHeight, targetWidth) {
+            const resizedImage = tf.image.resizeBilinear(imageTensor, [targetHeight, targetWidth]);
+            return resizedImage;
+        }
+        
+        async function getWebcamImage() {
+            const img = ( await webcam.capture() ).toFloat();
+            const resizedImg = await resizeImage(img, 224, 224);
+            const normalized = resizedImg.div( 127 ).sub( 1 );
+            return normalized;
+        }
+
+        async function captureSample( category ) {
+            trainingData.push( {
+                image: await getWebcamImage(),
+                category: category
+            });
+            setText( "Captured: " + labels[ category ] );
+        }
+
+        let webcam = null;
+
+        (async () => {
+            // Load the model
+            model = await tf.loadLayersModel( mobilenet );
+            model = createTransferModel( model );
+            await setupWebcam();
+            webcam = await tf.data.webcam( document.getElementById( "webcam" ) );
+            // Setup prediction every 200 ms
+            setInterval( predictImage, 200 );
+        })();
+        </script>
+    </body>
+</html>
