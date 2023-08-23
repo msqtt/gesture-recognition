@@ -7,14 +7,15 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  transform: translate(-50%,-50%);
+  transform: translate(-50%, -50%);
   display: flex;
   justify-content: space-around;
   align-items: center;
-  width: 55%;
+  width: 70%;
   height: 70%;
 }
-.left,.right{
+.left,
+.right {
   background-color: #fff;
   width: 45%;
   height: 100%;
@@ -23,6 +24,7 @@ body {
   display: block;
   margin: 0px auto;
 }
-.video-teach {
+.video-tea2h {
   margin: 40px auto;
 }
+
